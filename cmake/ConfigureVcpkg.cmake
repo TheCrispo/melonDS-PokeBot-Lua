@@ -1,25 +1,18 @@
+include(FetchContent)
+
 set(_DEFAULT_VCPKG_ROOT "${CMAKE_SOURCE_DIR}/vcpkg")
 set(VCPKG_ROOT "${_DEFAULT_VCPKG_ROOT}" CACHE STRING "The path to the vcpkg repository")
 
 if (VCPKG_ROOT STREQUAL "${_DEFAULT_VCPKG_ROOT}")
-    file(LOCK "${CMAKE_SOURCE_DIR}/.vcpkg.lock")
-
-    find_package(Git)
-
-    if (GIT_FOUND)
-        if (NOT EXISTS "${_DEFAULT_VCPKG_ROOT}")
-            execute_process(
-                COMMAND ${GIT_EXECUTABLE} clone https://github.com/Microsoft/vcpkg.git "${_DEFAULT_VCPKG_ROOT}"
-                RESULT_VARIABLE git_result)
-
-            if (NOT git_result EQUAL 0)
-                message(FATAL_ERROR "Git clone of vcpkg failed. Please provide vcpkg yourself at ${_VCPKG_DEFAULT_ROOT} or set VCPKG_ROOT.")
-            endif()
-        endif()
+    if (APPLE) # this doesn't work on non-macOS
+        file(LOCK "${_DEFAULT_VCPKG_ROOT}" DIRECTORY GUARD FILE)
     endif()
-
-    file(LOCK "${CMAKE_SOURCE_DIR}/.vcpkg.lock" RELEASE)
-    file(REMOVE "${CMAKE_SOURCE_DIR}/.vcpkg.lock")
+    FetchContent_Declare(vcpkg
+        GIT_REPOSITORY "https://github.com/Microsoft/vcpkg.git"
+        GIT_TAG HEAD
+        EXCLUDE_FROM_ALL
+        SOURCE_DIR "${CMAKE_SOURCE_DIR}/vcpkg")
+    FetchContent_MakeAvailable(vcpkg)
 endif()
 
 option(USE_RECOMMENDED_TRIPLETS "Use the recommended triplets that are used for official builds" ON)
@@ -76,7 +69,6 @@ if (USE_RECOMMENDED_TRIPLETS)
         endif()
     elseif(WIN32)
         set(_CAN_TARGET_AS_HOST ON)
-
         if (ENABLE_DEBUG_DEPS)
             set(_RELEASE_SUFFIX "")
         else()
@@ -87,28 +79,16 @@ if (USE_RECOMMENDED_TRIPLETS)
             set(_WIN32_ENV mingw)
         else()
             set(_WIN32_ENV windows)
-            set(_WIN32_ARCH "$ENV{VSCMD_ARG_TGT_ARCH}")
-            if (NOT _WIN32_ARCH STREQUAL "$ENV{VSCMD_ARG_HOST_ARCH}")
-                set(_CAN_TARGET_AS_HOST OFF)
-
-                # HACK: CMake wants to use the arm64 pkg-config on x86_64 hosts, this won't work
-                # so we gotta override the executable manually
-                set(PKG_CONFIG_EXECUTABLE "${CMAKE_BINARY_DIR}/vcpkg_installed/$ENV{VSCMD_ARG_HOST_ARCH}-windows/tools/pkgconf/pkgconf.exe")
-                # CMake does not correctly set the target arch for assembly when cross compiling for Windows
-                set(CMAKE_ASM_FLAGS_INIT "${CMAKE_ASM_FLAGS_INIT} --target=${_WIN32_ARCH}-pc-windows-msvc")
-            endif()
         endif()
 
-	if (NOT _WIN32_ARCH)
-            if ("$ENV{PROCESSOR_ARCHITECTURE}" STREQUAL "AMD64")
-                set(_WIN32_ARCH x64)
-            elseif ("$ENV{PROCESSOR_ARCHITECTURE}" STREQUAL "ARM64")
-                set(_WIN32_ARCH arm64)
-            elseif ("$ENV{PROCESSOR_ARCHITECTURE}" STREQUAL "x86")
-                set(_WIN32_ARCH x86)
-            else()
-                message(FATAL_ERROR "Unknown processor architecture '$ENV{PROCESSOR_ARCHITECTURE}'. Please disable USE_RECOMMENDED_TRIPLETS and set your vcpkg settings manually.")
-            endif()
+        if ("$ENV{PROCESSOR_ARCHITECTURE}" STREQUAL "AMD64")
+            set(_WIN32_ARCH x64)
+        elseif ("$ENV{PROCESSOR_ARCHITECTURE}" STREQUAL "ARM64")
+            set(_WIN32_ARCH arm64)
+        elseif ("$ENV{PROCESSOR_ARCHITECTURE}" STREQUAL "x86")
+            set(_WIN32_ARCH x86)
+        else()
+            message(FATAL_ERROR "Unknown processor architecture '$ENV{PROCESSOR_ARCHITECTURE}'. Please disable USE_RECOMMENDED_TRIPLETS and set your vcpkg settings manually.")
         endif()
 
         set(_WANTED_TRIPLET ${_WIN32_ARCH}-${_WIN32_ENV}-static${_RELEASE_SUFFIX})

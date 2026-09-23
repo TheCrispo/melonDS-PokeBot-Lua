@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -48,7 +48,6 @@ enum
     HK_PowerButton,
     HK_VolumeUp,
     HK_VolumeDown,
-    HK_AudioMuteToggle,
     HK_SlowMo,
     HK_FastForwardToggle,
     HK_SlowMoToggle,
@@ -122,8 +121,7 @@ public:
     void setVSyncGL(bool vsync);
     void makeCurrentGL();
     void releaseGL();
-
-    void drawScreen();
+    void drawScreenGL();
 
     // return: empty string = setup OK, non-empty = error message
     QString verifySetup();
@@ -162,12 +160,22 @@ public:
     void touchScreen(int x, int y);
     void releaseScreen();
 
+    void setLuaInputMask(melonDS::u32 mask) { luaInputMask = mask & 0xFFF; luaInputOverride = true; }
+    void clearLuaInputOverride() { luaInputOverride = false; }
+    bool hasLuaInputOverride() const { return luaInputOverride; }
+    melonDS::u32 getLuaInputMask() const { return luaInputMask; }
+
     // mic start/stop control from core
     void micStart();
     void micStop();
     int micReadInput(melonDS::s16* data, int maxlength);
 
     QMutex renderLock;
+
+    // Lua scripting bridge: public wrappers for operations that remain internally private.
+    bool luaLoadState(const std::string& filename) { return loadState(filename); }
+    bool luaSaveState(const std::string& filename) { return saveState(filename); }
+    void luaReset() { reset(); }
 
 private:
     static int lastSep(const std::string& path);
@@ -177,7 +185,7 @@ private:
     QString verifyDSiBIOS();
     QString verifyDSFirmware();
     QString verifyDSiFirmware();
-    QString verifyDSiNAND(bool isoptional);
+    QString verifyDSiNAND();
 
     std::string getEffectiveFirmwareSavePath();
     void initFirmwareSaveManager() noexcept;
@@ -224,9 +232,7 @@ private:
     void audioDeInit();
     void audioEnable();
     void audioDisable();
-    void updateAudioMuteByWindowFocus();
-    void toggleAudioMute();
-    void updateFastForwardMute(bool fastForward);
+    void audioMute();
     void audioSync();
     void audioUpdateSettings();
 
@@ -259,7 +265,6 @@ private:
     void loadRTCData();
     void saveRTCData();
     void setDateTime();
-    void syncRTC();
 
     bool deleting;
 
@@ -309,6 +314,7 @@ private:
 
     std::unique_ptr<melonDS::Savestate> backupState;
     bool savestateLoaded;
+    std::string previousSaveFile;
 
     std::unique_ptr<melonDS::ARCodeFile> cheatFile;
     bool cheatsOn;
@@ -317,9 +323,7 @@ private:
     int audioFreq;
     int audioBufSize;
     float audioSampleFrac;
-    bool audioMutedToggle;
-    bool audioMutedByFastForward;
-    bool audioMutedByWindowFocus;
+    bool audioMuted;
     SDL_cond* audioSyncCond;
     SDL_mutex* audioSyncLock;
 
@@ -374,6 +378,8 @@ private:
     melonDS::u32 hotkeyPress, hotkeyRelease;
 
     melonDS::u32 inputMask;
+    melonDS::u32 luaInputMask = 0xFFF;
+    bool luaInputOverride = false;
 
     bool isTouching;
     melonDS::u16 touchX, touchY;

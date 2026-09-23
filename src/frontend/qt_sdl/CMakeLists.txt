@@ -42,7 +42,6 @@ set(SOURCES_QT_SDL
     AboutDialog.cpp
     AboutDialog.h
     AboutDialog.ui
-    ARCodeQDecl.h
 
     ArchiveUtil.h
     ArchiveUtil.cpp
@@ -60,6 +59,7 @@ set(SOURCES_QT_SDL
 
     LANDialog.cpp
     NetplayDialog.cpp
+    LuaScript.cpp
 )
 
 option(USE_QT6 "Use Qt 6 instead of Qt 5" ON)
@@ -77,6 +77,7 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
 find_package(Threads REQUIRED)
+find_package(Lua 5.4 REQUIRED)
 find_package(PkgConfig REQUIRED)
 
 if (BUILD_STATIC)
@@ -93,6 +94,12 @@ fix_interface_includes(PkgConfig::SDL2 PkgConfig::LibArchive)
 add_compile_definitions(ARCHIVE_SUPPORT_ENABLED)
 
 add_executable(melonDS ${SOURCES_QT_SDL})
+
+# SDL2 normally remaps main() to SDL_main on Windows. melonDS already provides
+# its own normal main(), so prevent SDL from rewriting it.
+if (WIN32)
+    target_compile_definitions(melonDS PRIVATE SDL_MAIN_HANDLED)
+endif()
 
 add_subdirectory("../../net"
     ${CMAKE_BINARY_DIR}/net)
@@ -176,8 +183,10 @@ if (BUILD_STATIC)
     if (USE_VCPKG AND UNIX AND NOT APPLE)
         pkg_check_modules(ALSA REQUIRED IMPORTED_TARGET alsa)
         target_link_libraries(melonDS PRIVATE PkgConfig::ALSA)
-    elseif (NOT APPLE)
+    else()
+        if (NOT (WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC"))
         target_link_options(melonDS PRIVATE -static)
+    endif()
     endif()
 endif()
 
@@ -191,7 +200,8 @@ else()
     target_include_directories(melonDS PUBLIC ${Qt5Gui_PRIVATE_INCLUDE_DIRS})
 endif()
 target_link_libraries(melonDS PRIVATE core)
-target_link_libraries(melonDS PRIVATE PkgConfig::SDL2 PkgConfig::LibArchive PkgConfig::Zstd PkgConfig::Faad)
+target_include_directories(melonDS PRIVATE ${LUA_INCLUDE_DIR})
+target_link_libraries(melonDS PRIVATE PkgConfig::SDL2 PkgConfig::LibArchive PkgConfig::Zstd PkgConfig::Faad ${LUA_LIBRARIES})
 target_link_libraries(melonDS PRIVATE ${QT_LINK_LIBS} ${CMAKE_DL_LIBS})
 
 if (WIN32)
@@ -206,17 +216,24 @@ if (WIN32)
     target_sources(melonDS PUBLIC "${CMAKE_BINARY_DIR}/res/melon.rc")
     target_include_directories(melonDS PRIVATE "${CMAKE_BINARY_DIR}/res")
 
-    if (${ARCHITECTURE} STREQUAL x86_64)
+    if ("${ARCHITECTURE}" STREQUAL "x86_64")
         set(WIN32_ARCHITECTURE amd64)
-    elseif (${ARCHITECTURE} STREQUAL x86)
+    elseif ("${ARCHITECTURE}" STREQUAL "x86")
         set(WIN32_ARCHITECTURE x86)
-    elseif (${ARCHITECTURE} MATCHES "ARM(64)?")
+    elseif ("${ARCHITECTURE}" MATCHES "ARM(64)?")
         string(TOLOWER "${ARCHITECTURE}" WIN32_ARCHITECTURE)
     endif()
 
 
-    target_link_libraries(melonDS PRIVATE ws2_32 iphlpapi)
-    set_target_properties(melonDS PROPERTIES WIN32_EXECUTABLE $<IF:$<CONFIG:Debug>,OFF,ON>)
+    target_link_libraries(melonDS PRIVATE ws2_32 iphlpapi winmm)
+    # Keep the normal CMake/Qt executable entry-point handling on Windows.
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+        # ClangCL + Qt6EntryPoint can fail to resolve the native main() symbol.
+        # Build as a normal console-subsystem executable; Qt itself still creates the GUI.
+        set_target_properties(melonDS PROPERTIES WIN32_EXECUTABLE OFF)
+    else()
+        set_target_properties(melonDS PROPERTIES WIN32_EXECUTABLE $<IF:$<CONFIG:Debug>,OFF,ON>)
+    endif()
 
     if (MINGW)
         configure_file("${CMAKE_SOURCE_DIR}/res/xp.manifest.in" "${CMAKE_BINARY_DIR}/res/xp.manifest")

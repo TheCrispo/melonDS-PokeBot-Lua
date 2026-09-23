@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -412,10 +412,13 @@ TitleImportDialog::~TitleImportDialog()
 
 void TitleImportDialog::accept()
 {
+    QString path;
+    FILE* f;
+
     bool tmdfromfile = (grpTmdSource->checkedId() == 0);
 
-    QString path = ui->txtAppFile->text();
-    Platform::FileHandle* f = Platform::OpenFile(path.toStdString(), FileMode::Read);
+    path = ui->txtAppFile->text();
+    f = fopen(path.toStdString().c_str(), "rb");
     if (!f)
     {
         QMessageBox::critical(this,
@@ -424,9 +427,9 @@ void TitleImportDialog::accept()
         return;
     }
 
-    Platform::FileSeek(f, 0x230, FileSeekOrigin::Start);
-    Platform::FileRead(titleid, 8, 1, f);
-    Platform::CloseFile(f);
+    fseek(f, 0x230, SEEK_SET);
+    fread(titleid, 8, 1, f);
+    fclose(f);
 
     if (titleid[1] != 0x00030004)
     {
@@ -439,7 +442,7 @@ void TitleImportDialog::accept()
     if (tmdfromfile)
     {
         path = ui->txtTmdFile->text();
-        Platform::FileHandle* f = Platform::OpenFile(path.toStdString(), FileMode::Read);
+        f = fopen(path.toStdString().c_str(), "rb");
         if (!f)
         {
             QMessageBox::critical(this,
@@ -448,8 +451,8 @@ void TitleImportDialog::accept()
             return;
         }
 
-        Platform::FileRead((void *) tmdData, sizeof(DSi_TMD::TitleMetadata), 1, f);
-        Platform::CloseFile(f);
+        fread((void *) tmdData, sizeof(DSi_TMD::TitleMetadata), 1, f);
+        fclose(f);
 
         u32 tmdtitleid[2];
         tmdtitleid[0] = tmdData->GetCategory();

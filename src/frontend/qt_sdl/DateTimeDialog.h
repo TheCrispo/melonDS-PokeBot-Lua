@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -46,7 +46,7 @@ public:
         }
 
         currentDlg = new DateTimeDialog(parent);
-        currentDlg->show();
+        currentDlg->open();
         return currentDlg;
     }
     static void closeDlg()

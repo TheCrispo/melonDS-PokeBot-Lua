@@ -25,6 +25,9 @@ jobs:
         include:
           - os: freebsd
             os_name: FreeBSD
+            # CMake's autorcc for Qt tries to lock files, so we need to
+            # start lockd for NFS, otherwise the build will fail.
+            prepare_vm: service lockd onestart
             install_deps: >
               pkg install -y cmake kf6-extra-cmake-modules pkgconf ninja
               qt6-base qt6-multimedia qt6-svg sdl2 libarchive zstd enet
@@ -39,12 +42,10 @@ jobs:
             # to call it using its absolute location.
             prepare_vm: |
               /usr/sbin/pkg_add pkgin curl
-              base=https://cdn.netbsd.org/pub/NetBSD
               mach=$(uname -m | sed "s/evbarm/evbarm-$(uname -p)/")
-              rel=NetBSD-$(uname -r)
               for set in xbase xcomp; do
-                curl -sL $base/$rel/$mach/binary/sets/$set.tar.xz |
-                  tar xJpf - -C /
+                curl -sL ${PKG_PATH%%/pkgsrc*}/NetBSD/NetBSD-$(uname -r
+                  )/$mach/binary/sets/$set.tar.xz | tar xJpf - -C /
               done
             install_deps: >
               pkgin -y install cmake extra-cmake-modules pkgconf
@@ -66,7 +67,7 @@ jobs:
         shell: ${{ matrix.os }} {0}
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v4
       name: Check out sources
 
     - name: Start ${{ matrix.os_name }} VM
@@ -90,17 +91,17 @@ jobs:
       run: ${{ matrix.install_deps }}
 
     - name: Configure
-      run: >
-        cmake -S $GITHUB_WORKSPACE -B /tmp/build -G Ninja
-        -DMELONDS_EMBED_BUILD_INFO=ON
+      run: |
+        cd $GITHUB_WORKSPACE
+        cmake -B build -G Ninja -DMELONDS_EMBED_BUILD_INFO=ON
 
     - name: Build
       run: |
-        cmake --build /tmp/build
-        cp -RP /tmp/build $GITHUB_WORKSPACE/
+        cd $GITHUB_WORKSPACE
+        cmake --build build
 
     - name: Upload binary
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v4
       with:
         name: melonDS-${{ matrix.os }}-${{ matrix.arch }}
         path: build/melonDS

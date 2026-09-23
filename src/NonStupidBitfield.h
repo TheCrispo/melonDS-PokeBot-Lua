@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team, RSDuck
+    Copyright 2016-2025 melonDS team, RSDuck
 
     This file is part of melonDS.
 
@@ -215,32 +215,8 @@ struct NonStupidBitField
         }
         else
         {
-            Data[startEntry] |= (0xFFFFFFFFFFFFFFFF >> (64-bitsCount) << (startBit & 0x3F));
+            Data[startEntry] |= ((1ULL << bitsCount) - 1) << (startBit & 0x3F);
         }
-    }
-
-    bool CheckRange(u32 startBit, u32 bitsCount)
-    {
-        u32 startEntry = startBit >> 6;
-        u64 entriesCount = (((startBit + bitsCount + 0x3F) & ~0x3F) >> 6) - startEntry;
-        u64 res = 0;
-
-        if (entriesCount > 1)
-        {
-            res = (Data[startEntry] & (0xFFFFFFFFFFFFFFFF << (startBit & 0x3F)));
-            if ((startBit + bitsCount) & 0x3F)
-                res |= (Data[startEntry + entriesCount - 1] & (~(0xFFFFFFFFFFFFFFFF << ((startBit + bitsCount) & 0x3F))));
-            else
-                res |= Data[startEntry + entriesCount - 1];
-            for (u64 i = startEntry + 1; i < startEntry + entriesCount - 1; i++)
-                res |= Data[i];
-        }
-        else
-        {
-            res = (Data[startEntry] & (0xFFFFFFFFFFFFFFFF >> (64-bitsCount) << (startBit & 0x3F)));
-        }
-
-        return !!res;
     }
 
     int Min() const

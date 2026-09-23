@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -127,6 +127,9 @@ public:
 
     void enableCheats(bool enable);
 
+    void queueLuaScript(const QString& filename);
+    void queueLuaControl(const QString& control);
+
     bool emuIsRunning();
     bool emuIsActive();
 
@@ -136,6 +139,9 @@ public:
     void returnGL();
     void updateVideoSettings() { videoSettingsDirty = true; }
     void updateVideoRenderer() { videoSettingsDirty = true; lastVideoRenderer = -1; }
+
+    int frontBuffer = 0;
+    QMutex frontBufferLock;
 
     QWaitCondition glBorrowCond;
     QMutex glBorrowMutex;
@@ -162,6 +168,10 @@ signals:
 
 private:
     void handleMessages();
+
+    QMutex luaMutex;
+    QString luaPendingScript;
+    QString luaPendingControl;
 
     void updateRenderer();
     void compileShaders();

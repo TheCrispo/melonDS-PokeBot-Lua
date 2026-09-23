@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -164,7 +164,7 @@ public:
     static_assert(sizeof(ExtendedWifiAccessPoint) == 512, "WifiAccessPoint should be 512 bytes");
 
 
-    enum FirmwareConsoleType : u8
+    enum class FirmwareConsoleType : u8
     {
         DS = 0xFF,
         DSLite = 0x20,
@@ -266,7 +266,7 @@ public:
             u8 BuildMonth;
             u8 BuildYear;
 
-            u8 ConsoleType;
+            FirmwareConsoleType ConsoleType;
 
             u8 Unused0[2];
 
@@ -368,7 +368,7 @@ public:
 
     union UserData
     {
-        UserData(int consoletype);
+        UserData();
         void UpdateChecksum();
         [[nodiscard]] bool ChecksumValid() const
         {

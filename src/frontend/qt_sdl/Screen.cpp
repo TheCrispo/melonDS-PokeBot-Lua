@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -752,8 +752,6 @@ void ScreenPanel::calcSplashLayout()
 
 ScreenPanelNative::ScreenPanelNative(QWidget* parent) : ScreenPanel(parent)
 {
-    hasBuffers = false;
-
     screen[0] = QImage(256, 192, QImage::Format_RGB32);
     screen[1] = QImage(256, 192, QImage::Format_RGB32);
 
@@ -778,23 +776,6 @@ void ScreenPanelNative::setupScreenLayout()
     }
 }
 
-void ScreenPanelNative::drawScreen()
-{
-    auto emuThread = emuInstance->getEmuThread();
-    if (!emuThread->emuIsActive())
-    {
-        hasBuffers = false;
-        return;
-    }
-
-    auto nds = emuInstance->getNDS();
-    assert(nds != nullptr);
-
-    bufferLock.lock();
-    hasBuffers = nds->GPU.GetFramebuffers(&topBuffer, &bottomBuffer);
-    bufferLock.unlock();
-}
-
 void ScreenPanelNative::paintEvent(QPaintEvent* event)
 {
     QPainter painter(this);
@@ -803,18 +784,24 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
     painter.fillRect(event->rect(), QColor::fromRgb(0, 0, 0));
 
     auto emuThread = emuInstance->getEmuThread();
-    
+
     if (emuThread->emuIsActive())
     {
         emuInstance->renderLock.lock();
+        auto nds = emuInstance->getNDS();
 
-        bufferLock.lock();
-        if (hasBuffers)
+        assert(nds != nullptr);
+        emuThread->frontBufferLock.lock();
+        int frontbuf = emuThread->frontBuffer;
+        if (!nds->GPU.Framebuffer[frontbuf][0] || !nds->GPU.Framebuffer[frontbuf][1])
         {
-            memcpy(screen[0].scanLine(0), topBuffer, 256 * 192 * 4);
-            memcpy(screen[1].scanLine(0), bottomBuffer, 256 * 192 * 4);
+            emuThread->frontBufferLock.unlock();
+            return;
         }
-        bufferLock.unlock();
+
+        memcpy(screen[0].scanLine(0), nds->GPU.Framebuffer[frontbuf][0].get(), 256 * 192 * 4);
+        memcpy(screen[1].scanLine(0), nds->GPU.Framebuffer[frontbuf][1].get(), 256 * 192 * 4);
+        emuThread->frontBufferLock.unlock();
 
         QRect screenrc(0, 0, 256, 192);
 
@@ -930,27 +917,31 @@ void ScreenPanelGL::initOpenGL()
                                          {{"oColor", 0}});
 
     glUseProgram(screenShaderProgram);
-    glUniform1i(glGetUniformLocation(screenShaderProgram, "TopScreenTex"), 0);
-    glUniform1i(glGetUniformLocation(screenShaderProgram, "BottomScreenTex"), 1);
+    glUniform1i(glGetUniformLocation(screenShaderProgram, "ScreenTex"), 0);
 
     screenShaderScreenSizeULoc = glGetUniformLocation(screenShaderProgram, "uScreenSize");
     screenShaderTransformULoc = glGetUniformLocation(screenShaderProgram, "uTransform");
 
+    // to prevent bleeding between both parts of the screen
+    // with bilinear filtering enabled
+    const int paddedHeight = 192*2+2;
+    const float padPixels = 1.f / paddedHeight;
+
     const float vertices[] =
     {
-        0.f,   0.f,    0.f, 0.f, 0.f,
-        0.f,   192.f,  0.f, 1.f, 0.f,
-        256.f, 192.f,  1.f, 1.f, 0.f,
-        0.f,   0.f,    0.f, 0.f, 0.f,
-        256.f, 192.f,  1.f, 1.f, 0.f,
-        256.f, 0.f,    1.f, 0.f, 0.f,
+        0.f,   0.f,    0.f, 0.f,
+        0.f,   192.f,  0.f, 0.5f - padPixels,
+        256.f, 192.f,  1.f, 0.5f - padPixels,
+        0.f,   0.f,    0.f, 0.f,
+        256.f, 192.f,  1.f, 0.5f - padPixels,
+        256.f, 0.f,    1.f, 0.f,
 
-        0.f,   0.f,    0.f, 0.f, 1.f,
-        0.f,   192.f,  0.f, 1.f, 1.f,
-        256.f, 192.f,  1.f, 1.f, 1.f,
-        0.f,   0.f,    0.f, 0.f, 1.f,
-        256.f, 192.f,  1.f, 1.f, 1.f,
-        256.f, 0.f,    1.f, 0.f, 1.f
+        0.f,   0.f,    0.f, 0.5f + padPixels,
+        0.f,   192.f,  0.f, 1.f,
+        256.f, 192.f,  1.f, 1.f,
+        0.f,   0.f,    0.f, 0.5f + padPixels,
+        256.f, 192.f,  1.f, 1.f,
+        256.f, 0.f,    1.f, 0.5f + padPixels
     };
 
     glGenBuffers(1, &screenVertexBuffer);
@@ -960,18 +951,22 @@ void ScreenPanelGL::initOpenGL()
     glGenVertexArrays(1, &screenVertexArray);
     glBindVertexArray(screenVertexArray);
     glEnableVertexAttribArray(0); // position
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5*4, (void*)(0));
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)(0));
     glEnableVertexAttribArray(1); // texcoord
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5*4, (void*)(2*4));
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)(2*4));
 
     glGenTextures(1, &screenTexture);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, screenTexture);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, 256, 192, 2, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
+    glBindTexture(GL_TEXTURE_2D, screenTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, paddedHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    // fill the padding
+    u8 zeroData[256*4*4];
+    memset(zeroData, 0, sizeof(zeroData));
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192, 256, 2, GL_RGBA, GL_UNSIGNED_BYTE, zeroData);
 
 
     OpenGL::CompileVertexFragmentProgram(osdShader,
@@ -1101,7 +1096,7 @@ void ScreenPanelGL::osdDeleteItem(OSDItem* item)
     ScreenPanel::osdDeleteItem(item);
 }
 
-void ScreenPanelGL::drawScreen()
+void ScreenPanelGL::drawScreenGL()
 {
     if (!glContext) return;
 
@@ -1115,11 +1110,10 @@ void ScreenPanelGL::drawScreen()
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDisable(GL_DEPTH_TEST);
-    glDepthMask(GL_FALSE);
+    glDepthMask(false);
     glDisable(GL_BLEND);
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_STENCIL_TEST);
-    glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
 
     glViewport(0, 0, w, h);
@@ -1131,33 +1125,34 @@ void ScreenPanelGL::drawScreen()
         glUseProgram(screenShaderProgram);
         glUniform2f(screenShaderScreenSizeULoc, w / factor, h / factor);
 
-        void* topbuf; void* bottombuf;
-        if (nds->GPU.GetFramebuffers(&topbuf, &bottombuf))
+        int frontbuf = emuThread->frontBuffer;
+        glActiveTexture(GL_TEXTURE0);
+
+#ifdef OGLRENDERER_ENABLED
+        if (nds->GPU.GetRenderer3D().Accelerated)
         {
-            // if we're doing a regular render, use the provided framebuffers
-            // otherwise, GetFramebuffers() will set up the required state
-
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D_ARRAY, screenTexture);
-
-            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 256, 192, 1, GL_BGRA,
-                            GL_UNSIGNED_BYTE, topbuf);
-            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 1, 256, 192, 1, GL_BGRA,
-                            GL_UNSIGNED_BYTE, bottombuf);
-        }
-        else
+            // hardware-accelerated render
+            nds->GPU.GetRenderer3D().BindOutputTexture(frontbuf);
+        } else
+#endif
         {
-            GLuint texid = *(GLuint*)topbuf;
+            // regular render
+            glBindTexture(GL_TEXTURE_2D, screenTexture);
 
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D_ARRAY, texid);
+            if (nds->GPU.Framebuffer[frontbuf][0] && nds->GPU.Framebuffer[frontbuf][1])
+            {
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 192, GL_RGBA,
+                                GL_UNSIGNED_BYTE, nds->GPU.Framebuffer[frontbuf][0].get());
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192 + 2, 256, 192, GL_RGBA,
+                                GL_UNSIGNED_BYTE, nds->GPU.Framebuffer[frontbuf][1].get());
+            }
         }
 
         screenSettingsLock.lock();
 
         GLint filter = this->filter ? GL_LINEAR : GL_NEAREST;
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, filter);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
 
         glBindBuffer(GL_ARRAY_BUFFER, screenVertexBuffer);
         glBindVertexArray(screenVertexArray);
@@ -1304,7 +1299,6 @@ std::optional<WindowInfo> ScreenPanelGL::getWindowInfo()
         wi.display_connection = x11->display();
         wi.window_handle = reinterpret_cast<void*>(winId());
     }
-    #if defined(WAYLAND_ENABLED)
     else if (platform_name == QStringLiteral("wayland"))
     {
         wi.type = WindowInfo::Type::Wayland;
@@ -1312,7 +1306,6 @@ std::optional<WindowInfo> ScreenPanelGL::getWindowInfo()
         wi.display_connection = wl->display();
         wi.window_handle = reinterpret_cast<void*>(winId());
     }
-    #endif
     #else
     QPlatformNativeInterface* pni = QGuiApplication::platformNativeInterface();
     if (platform_name == QStringLiteral("xcb"))

@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -46,8 +46,6 @@ DateTimeDialog::DateTimeDialog(QWidget* parent) : QDialog(parent), ui(new Ui::Da
     startTimer(1000);
 
     ui->txtNewCustomTime->setEnabled(ui->chkChangeTime->isChecked());
-
-    ui->chkSyncTime->setChecked(cfg.GetBool("RTC.SyncToHost"));
 }
 
 DateTimeDialog::~DateTimeDialog()
@@ -75,8 +73,6 @@ void DateTimeDialog::done(int r)
         else if (ui->chkResetTime->isChecked())
             cfg.SetInt64("RTC.Offset", 0);
 
-        cfg.SetBool("RTC.SyncToHost", ui->chkSyncTime->isChecked());
-
         Config::Save();
     }
 
@@ -87,12 +83,7 @@ void DateTimeDialog::done(int r)
 
 void DateTimeDialog::on_chkChangeTime_clicked(bool checked)
 {
-    if (checked)
-	{
-		ui->chkResetTime->setChecked(false);
-		ui->txtNewCustomTime->setDateTime(customTime);
-	}
-	
+    if (checked) ui->chkResetTime->setChecked(false);
     ui->txtNewCustomTime->setEnabled(checked);
 }
 

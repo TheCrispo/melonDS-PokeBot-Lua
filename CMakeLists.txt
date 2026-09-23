@@ -65,6 +65,13 @@ detect_architecture("__aarch64__" ARM64)
 cmake_dependent_option(ENABLE_JIT "Enable JIT recompiler" ON
     "ARCHITECTURE STREQUAL x86_64 OR ARCHITECTURE STREQUAL ARM64;NOT ARCHITECTURE STREQUAL x86_64 OR NOT APPLE" OFF)
 cmake_dependent_option(ENABLE_JIT_PROFILING "Enable JIT profiling with VTune" OFF "ENABLE_JIT" OFF)
+
+# PokéBot Focus Mode build: keep JIT available on Windows clang-cl.
+# ARMJIT_x64/ARMJIT_Linkage.S already contains the WIN64 compatibility path
+# needed by clang-cl, so do not force ENABLE_JIT off for this toolchain.
+if (WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/W0>)
+endif()
 option(ENABLE_OGLRENDERER "Enable OpenGL renderer" ON)
 
 check_ipo_supported(RESULT IPO_SUPPORTED)
@@ -80,7 +87,9 @@ if (ENABLE_LTO)
 endif()
 
 if (NOT APPLE)
+    if (NOT (WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC"))
     set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} -s")
+endif()
 endif()
 
 if (WIN32)

@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -130,7 +130,6 @@ void FirmwareMem::SetupDirectBoot()
 {
     const auto& header = FirmwareData.GetHeader();
     const auto& userdata = FirmwareData.GetEffectiveUserData();
-
     if (NDS.ConsoleType == 1)
     {
         // The ARMWrite methods are virtual, they'll delegate to DSi if necessary
@@ -407,7 +406,7 @@ void TSC::SetTouchCoords(u16 x, u16 y)
 void TSC::Write(u8 val)
 {
     if (DataPos == 1)
-        Data = (ConvResult >> 5) & 0x7F;
+        Data = (ConvResult >> 5) & 0xFF;
     else if (DataPos == 2)
         Data = (ConvResult << 3) & 0xFF;
     else
@@ -429,7 +428,7 @@ void TSC::Write(u8 val)
                 // after a certain time of no mic sampling, it will be stopped
                 NDS.Mic.Start(Mic_NDS);
 
-                u16 sample = (u16)NDS.Mic.ReadSample();
+                s16 sample = NDS.Mic.ReadSample();
 
                 // make it unsigned 12-bit
                 sample ^= 0x8000;

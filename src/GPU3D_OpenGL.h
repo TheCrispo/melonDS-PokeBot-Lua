@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -20,33 +20,40 @@
 
 #ifdef OGLRENDERER_ENABLED
 #include "GPU3D.h"
+#include "GPU_OpenGL.h"
 #include "OpenGLSupport.h"
-#include "GPU3D_TexcacheOpenGL.h"
-#include "NonStupidBitfield.h"
 
 namespace melonDS
 {
-class GLRenderer;
+class GPU;
 
-class GLRenderer3D : public Renderer3D
+class GLRenderer : public Renderer3D
 {
 public:
-    GLRenderer3D(melonDS::GPU3D& gpu3D, GLRenderer& parent) noexcept;
-    ~GLRenderer3D() override;
-    bool Init() override;
-    void Reset() override;
+    ~GLRenderer() override;
+    void Reset(GPU& gpu) override;
 
-    void SetRenderSettings(int scale, bool betterpolygons) noexcept;
+    void SetRenderSettings(bool betterpolygons, int scale) noexcept;
     void SetBetterPolygons(bool betterpolygons) noexcept;
     void SetScaleFactor(int scale) noexcept;
     [[nodiscard]] bool GetBetterPolygons() const noexcept { return BetterPolygons; }
     [[nodiscard]] int GetScaleFactor() const noexcept { return ScaleFactor; }
 
-    void RenderFrame() override;
+    void VCount144(GPU& gpu) override {};
+    void RenderFrame(GPU& gpu) override;
+    void Stop(const GPU& gpu) override;
     u32* GetLine(int line) override;
 
+    void SetupAccelFrame() override;
+    void PrepareCaptureFrame() override;
+    void Blit(const GPU& gpu) override;
+
+    void BindOutputTexture(int buffer) override;
+
+    static std::unique_ptr<GLRenderer> New() noexcept;
 private:
-    GLRenderer& Parent;
+    // Used by New()
+    GLRenderer(GLCompositor&& compositor) noexcept;
 
     // GL version requirements
     // * texelFetch: 3.0 (GLSL 1.30)     (3.2/1.50 for MS)
@@ -64,42 +71,33 @@ private:
         u32 EdgeIndicesOffset;
 
         u32 RenderKey;
-
-        GLuint TexID;
-        u32 TexRepeat;
     };
 
-    //GLCompositor CurGLCompositor;
+    GLCompositor CurGLCompositor;
     RendererPolygon PolygonList[2048] {};
 
-    bool TexEnable;
-    TexcacheOpenGL Texcache;
-
-    bool BuildRenderShader(bool wbuffer);
-    void UseRenderShader(bool wbuffer);
+    bool BuildRenderShader(u32 flags, const std::string& vs, const std::string& fs);
+    void UseRenderShader(u32 flags);
     void SetupPolygon(RendererPolygon* rp, Polygon* polygon) const;
-    u32* SetupVertex(const Polygon* poly, int vid, const Vertex* vtx, u32 vtxattr, u32 texlayer, u32* vptr) const;
-    void BuildPolygons(RendererPolygon* polygons, int npolys, int captureinfo[16]);
-    void SetupPolygonTexture(const RendererPolygon* poly) const;
+    u32* SetupVertex(const Polygon* poly, int vid, const Vertex* vtx, u32 vtxattr, u32* vptr) const;
+    void BuildPolygons(RendererPolygon* polygons, int npolys);
     int RenderSinglePolygon(int i) const;
     int RenderPolygonBatch(int i) const;
     int RenderPolygonEdgeBatch(int i) const;
-    void RenderSceneChunk(int y, int h);
-
+    void RenderSceneChunk(const GPU3D& gpu3d, int y, int h);
 
     enum
     {
-        RenderMode_Opaque = 0,
-        RenderMode_Translucent,
-        RenderMode_ShadowMask,
+        RenderFlag_WBuffer     = 0x01,
+        RenderFlag_Trans       = 0x02,
+        RenderFlag_ShadowMask  = 0x04,
+        RenderFlag_Edge        = 0x08,
     };
 
 
     GLuint ClearShaderPlain {};
-    GLuint ClearShaderBitmap {};
 
-    GLuint RenderShader[2] {};
-    GLint RenderModeULoc = 0;
+    GLuint RenderShader[16] {};
     GLuint CurShaderID = -1;
 
     GLuint FinalPassEdgeShader {};
@@ -126,11 +124,6 @@ private:
     GLuint ClearVertexBufferID = 0, ClearVertexArrayID {};
     GLint ClearUniformLoc[4] {};
 
-    GLint ClearBitmapULoc[2] {};
-    GLuint ClearBitmapTex[2];
-    u32* ClearBitmap[2];
-    u8 ClearBitmapDirty;
-
     // vertex buffer
     // * XYZW: 4x16bit
     // * RGBA: 4x8bit
@@ -154,13 +147,19 @@ private:
 
     const u32 EdgeIndicesOffset = 2048 * 30;
 
+    GLuint TexMemID {};
+    GLuint TexPalMemID {};
+
     int ScaleFactor {};
     bool BetterPolygons {};
     int ScreenW {}, ScreenH {};
 
     GLuint ColorBufferTex {}, DepthBufferTex {}, AttrBufferTex {};
+    GLuint DownScaleBufferTex {};
+    GLuint PixelbufferID {};
 
-    GLuint MainFramebuffer {};
+    GLuint MainFramebuffer {}, DownscaleFramebuffer {};
+    u32 Framebuffer[256*192] {};
 };
 }
 #endif

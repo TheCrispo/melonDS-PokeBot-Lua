@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -145,8 +145,6 @@ void DMA::WriteCnt(u32 val)
 
         if ((StartMode & 0x7) == 0)
             Start();
-        else if (StartMode == 0x05 || StartMode == 0x12)
-            NDS.NDSCartSlots[0]->CheckDMA(CPU);
         else if (StartMode == 0x07)
             NDS.GPU.GPU3D.CheckFIFODMA();
 
@@ -623,9 +621,6 @@ void DMA::Run9()
     Running = 0;
     InProgress = false;
     NDS.ResumeCPU(0, 1<<Num);
-
-    if (StartMode == 0x05)
-        NDS.NDSCartSlots[0]->CheckDMA(0);
 }
 
 void DMA::Run7()
@@ -696,9 +691,6 @@ void DMA::Run7()
     Running = 0;
     InProgress = false;
     NDS.ResumeCPU(1, 1<<Num);
-
-    if (StartMode == 0x12)
-        NDS.NDSCartSlots[0]->CheckDMA(1);
 }
 
 void DMA::Run()

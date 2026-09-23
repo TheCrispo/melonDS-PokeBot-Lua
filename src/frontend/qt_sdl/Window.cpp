@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -33,6 +33,7 @@
 #include <QMenuBar>
 #include <QMimeDatabase>
 #include <QFileDialog>
+#include <QDir>
 #include <QInputDialog>
 #include <QPaintEvent>
 #include <QPainter>
@@ -41,6 +42,13 @@
 #include <QVector>
 #include <QCommandLineParser>
 #include <QDesktopServices>
+#ifndef _WIN32
+#include <QGuiApplication>
+#include <QSocketNotifier>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <signal.h>
+#endif
 
 #include "main.h"
 #include "CheatsDialog.h"
@@ -70,6 +78,7 @@
 //#include "main_shaders.h"
 
 #include "EmuInstance.h"
+#include "LuaScript.h"
 #include "ArchiveUtil.h"
 #include "CameraManager.h"
 #include "Window.h"
@@ -206,6 +215,17 @@ static bool FileIsSupportedFiletype(const QString& filename, bool insideArchive 
 }
 
 
+#ifndef _WIN32
+static int signalFd[2];
+QSocketNotifier *signalSn;
+
+static void signalHandler(int)
+{
+    char a = 1;
+    write(signalFd[0], &a, sizeof(a));
+}
+#endif
+
 
 MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     QMainWindow(parent),
@@ -218,6 +238,26 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     enabledSaved(false),
     focused(true)
 {
+#ifndef _WIN32
+    if (!parent)
+    {
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, signalFd))
+        {
+            qFatal("Couldn't create socketpair");
+        }
+
+        signalSn = new QSocketNotifier(signalFd[1], QSocketNotifier::Read, this);
+        connect(signalSn, SIGNAL(activated(int)), this, SLOT(onQuit()));
+
+        struct sigaction sa;
+
+        sa.sa_handler = signalHandler;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
+        sa.sa_flags |= SA_RESTART;
+        sigaction(SIGINT, &sa, 0);
+    }
+#endif
 
     showOSD = windowCfg.GetBool("ShowOSD");
 
@@ -576,6 +616,22 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
             connect(actShowOSD, &QAction::triggered, this, &MainWindow::onChangeShowOSD);
         }
         {
+            QMenu * menu = menubar->addMenu("Tools");
+            actLuaScript = menu->addAction("Run Lua script...");
+            connect(actLuaScript, &QAction::triggered, this, &MainWindow::onOpenLuaScript);
+
+            menu->addSeparator();
+            QMenu * botMenu = menu->addMenu("Bot controls");
+            actLuaPause = botMenu->addAction("Pause bot");
+            actLuaResume = botMenu->addAction("Resume bot");
+            actLuaRestart = botMenu->addAction("Restart bot");
+            actLuaStop = botMenu->addAction("Stop bot");
+            connect(actLuaPause, &QAction::triggered, this, &MainWindow::onLuaPause);
+            connect(actLuaResume, &QAction::triggered, this, &MainWindow::onLuaResume);
+            connect(actLuaRestart, &QAction::triggered, this, &MainWindow::onLuaRestart);
+            connect(actLuaStop, &QAction::triggered, this, &MainWindow::onLuaStop);
+        }
+        {
             QMenu * menu = menubar->addMenu("Config");
 
             actEmuSettings = menu->addAction("Emu settings");
@@ -613,6 +669,14 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
             actPathSettings = menu->addAction("Path settings");
             connect(actPathSettings, &QAction::triggered, this, &MainWindow::onOpenPathSettings);
+
+            {
+                QMenu * submenu = menu->addMenu("Savestate settings");
+
+                actSavestateSRAMReloc = submenu->addAction("Separate savefiles");
+                actSavestateSRAMReloc->setCheckable(true);
+                connect(actSavestateSRAMReloc, &QAction::triggered, this, &MainWindow::onChangeSavestateSRAMReloc);
+            }
 
             menu->addSeparator();
 
@@ -687,7 +751,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
         actStop->setEnabled(false);
         actFrameStep->setEnabled(false);
 
-        //actDateTime->setEnabled(true);
+        actDateTime->setEnabled(true);
         actPowerManagement->setEnabled(false);
 
         actEnableCheats->setEnabled(false);
@@ -698,6 +762,8 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
         actROMInfo->setEnabled(false);
         actRAMInfo->setEnabled(false);
+
+        actSavestateSRAMReloc->setChecked(globalCfg.GetBool("Savestate.RelocSRAM"));
 
         actScreenRotation[windowCfg.GetInt("ScreenRotation")]->setChecked(true);
 
@@ -810,9 +876,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
 void MainWindow::createScreenPanel()
 {
-    auto oldpanel = panel;
+    if (panel) delete panel;
     panel = nullptr;
-    if (oldpanel) delete oldpanel;
 
     hasOGL = globalCfg.GetBool("Screen.UseGL") ||
             (globalCfg.GetInt("3D.Renderer") != renderer3D_Software);
@@ -915,10 +980,13 @@ void MainWindow::releaseGL()
     return glpanel->releaseGL();
 }
 
-void MainWindow::drawScreen()
+void MainWindow::drawScreenGL()
 {
-    if (!panel) return;
-    return panel->drawScreen();
+    if (!hasOGL) return;
+
+    ScreenPanelGL* glpanel = static_cast<ScreenPanelGL*>(panel);
+    if (!glpanel) return;
+    return glpanel->drawScreenGL();
 }
 
 void MainWindow::keyPressEvent(QKeyEvent* event)
@@ -1023,7 +1091,7 @@ void MainWindow::onFocusIn()
 {
     focused = true;
     if (emuInstance)
-        emuInstance->updateAudioMuteByWindowFocus();
+        emuInstance->audioMute();
 }
 
 void MainWindow::onFocusOut()
@@ -1032,7 +1100,7 @@ void MainWindow::onFocusOut()
     // prevent use after free
     focused = false;
     if (emuInstance)
-        emuInstance->updateAudioMuteByWindowFocus();
+        emuInstance->audioMute();
 }
 
 void MainWindow::onAppStateChanged(Qt::ApplicationState state)
@@ -1066,7 +1134,7 @@ bool MainWindow::preloadROMs(QStringList file, QStringList gbafile, bool boot)
 {
     QString errorstr;
 
-    if (file.isEmpty() && gbafile.isEmpty() && !boot)
+    if (file.isEmpty() && gbafile.isEmpty())
         return false;
 
     if (!verifySetup())
@@ -1105,7 +1173,7 @@ bool MainWindow::preloadROMs(QStringList file, QStringList gbafile, bool boot)
                 return false;
             }
         }
-
+        
         recentFileList.removeAll(file.join("|"));
         recentFileList.prepend(file.join("|"));
         updateRecentFilesMenu();
@@ -1633,8 +1701,39 @@ void MainWindow::onImportSavefile()
     }
 }
 
+void MainWindow::onOpenLuaScript()
+{
+    QString filename = QFileDialog::getOpenFileName(this, "Run Lua script", QDir::currentPath(), "Lua scripts (*.lua);;All files (*.*)");
+    if (filename.isEmpty()) return;
+    emuInstance->getEmuThread()->queueLuaScript(filename);
+}
+
+void MainWindow::onLuaPause()
+{
+    emuInstance->getEmuThread()->queueLuaControl("pause");
+}
+
+void MainWindow::onLuaResume()
+{
+    emuInstance->getEmuThread()->queueLuaControl("resume");
+}
+
+void MainWindow::onLuaRestart()
+{
+    emuInstance->getEmuThread()->queueLuaControl("restart");
+}
+
+void MainWindow::onLuaStop()
+{
+    emuInstance->getEmuThread()->queueLuaControl("stop");
+}
+
 void MainWindow::onQuit()
 {
+#ifndef _WIN32
+    if (!parentWidget())
+        signalSn->setEnabled(false);
+#endif
     close();
 }
 
@@ -1679,15 +1778,6 @@ void MainWindow::onFrameStep()
 void MainWindow::onOpenDateTime()
 {
     DateTimeDialog* dlg = DateTimeDialog::openDlg(this);
-    connect(dlg, &DateTimeDialog::finished, this, &MainWindow::onDateTimeDialogFinished);
-}
-
-void MainWindow::onDateTimeDialogFinished(int res)
-{
-    if (!res) return;
-    if (!emuThread->emuIsActive()) return;
-
-    emuInstance->setDateTime();
 }
 
 void MainWindow::onOpenPowerManagement()
@@ -1959,7 +2049,7 @@ void MainWindow::onOpenMPSettings()
 void MainWindow::onMPSettingsFinished(int res)
 {
     emuInstance->mpAudioMode = globalCfg.GetInt("MP.AudioMode");
-    emuInstance->updateAudioMuteByWindowFocus();
+    emuInstance->audioMute();
     MPInterface::Get().SetRecvTimeout(globalCfg.GetInt("MP.RecvTimeout"));
 
     emuThread->emuUnpause();
@@ -2002,6 +2092,11 @@ void MainWindow::onUpdateInterfaceSettings()
 void MainWindow::onInterfaceSettingsFinished(int res)
 {
     emuThread->emuUnpause();
+}
+
+void MainWindow::onChangeSavestateSRAMReloc(bool checked)
+{
+    globalCfg.SetBool("Savestate.RelocSRAM", checked);
 }
 
 void MainWindow::onChangeScreenSize()
@@ -2188,13 +2283,7 @@ void MainWindow::onScreenEmphasisToggled()
     {
         currentSizing = screenSizing_EmphTop;
     }
-    else
-    {
-        // For any other sizing mode, switch to EmphTop as a sensible default
-        currentSizing = screenSizing_EmphTop;
-    }
     windowCfg.SetInt("ScreenSizing", currentSizing);
-    actScreenSizing[currentSizing]->setChecked(true);
 
     emit screenLayoutChange();
 }
@@ -2218,7 +2307,7 @@ void MainWindow::onEmuStart()
     actStop->setEnabled(true);
     actFrameStep->setEnabled(true);
 
-    //actDateTime->setEnabled(false);
+    actDateTime->setEnabled(false);
     actPowerManagement->setEnabled(true);
 
     actTitleManager->setEnabled(false);
@@ -2240,7 +2329,7 @@ void MainWindow::onEmuStop()
     actStop->setEnabled(false);
     actFrameStep->setEnabled(false);
 
-    //actDateTime->setEnabled(true);
+    actDateTime->setEnabled(true);
     actPowerManagement->setEnabled(false);
 
     actTitleManager->setEnabled(!globalCfg.GetString("DSi.NANDPath").empty());

@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -48,12 +48,14 @@
 #include "RTC.h"
 #include "DSi.h"
 #include "DSi_I2C.h"
-#include "GPU_Soft.h"
-#include "GPU_OpenGL.h"
+#include "GPU3D_Soft.h"
+#include "GPU3D_OpenGL.h"
+#include "GPU3D_Compute.h"
 
 #include "Savestate.h"
 
 #include "EmuInstance.h"
+#include "LuaScript.h"
 
 using namespace melonDS;
 
@@ -149,6 +151,7 @@ void EmuThread::run()
     bool slowmo = false;
     emuInstance->fastForwardToggled = false;
     emuInstance->slowmoToggled = false;
+
 
     while (emuStatus != emuStatus_Exit)
     {
@@ -251,8 +254,31 @@ void EmuThread::run()
                 emuInstance->renderLock.unlock();
             }
 
-            // process input and hotkeys
-            emuInstance->nds->SetKeyMask(emuInstance->inputMask);
+            // Transfer any Lua script requested by the GUI thread into the emulator thread.
+            {
+                QMutexLocker locker(&luaMutex);
+                if (!luaPendingScript.isEmpty())
+                {
+                    LuaScript::queueScript(emuInstance, luaPendingScript);
+                    luaPendingScript.clear();
+                }
+                if (!luaPendingControl.isEmpty())
+                {
+                    const QString control = luaPendingControl;
+                    luaPendingControl.clear();
+                    if (control == "pause") LuaScript::pause();
+                    else if (control == "resume") LuaScript::resume();
+                    else if (control == "restart") LuaScript::restart();
+                    else if (control == "stop") LuaScript::stop();
+                }
+            }
+
+            // Give the Lua coroutine a chance to provide this frame's input.
+            LuaScript::update(emuInstance);
+            if (emuInstance->hasLuaInputOverride())
+                emuInstance->nds->SetKeyMask(emuInstance->getLuaInputMask());
+            else
+                emuInstance->nds->SetKeyMask(emuInstance->inputMask);
 
             if (emuInstance->isTouching)
                 emuInstance->nds->TouchScreen(emuInstance->touchX, emuInstance->touchY);
@@ -295,13 +321,10 @@ void EmuThread::run()
                 }
             }
 
-            // RTC sync
-            emuInstance->syncRTC();
-
 
             // emulate
             u32 nlines;
-            if (emuInstance->nds->GPU.GetRenderer().NeedsShaderCompile())
+            if (emuInstance->nds->GPU.GetRenderer3D().NeedsShaderCompile())
             {
                 compileShaders();
                 nlines = 1;
@@ -310,6 +333,9 @@ void EmuThread::run()
             {
                 nlines = emuInstance->nds->RunFrame();
             }
+
+            LuaScript::onFrameComplete();
+            const bool skipFramePresentation = LuaScript::isFocusModeActive();
 
             if (emuInstance->ndsSave)
                 emuInstance->ndsSave->CheckFlush();
@@ -320,7 +346,20 @@ void EmuThread::run()
             if (emuInstance->firmwareSave)
                 emuInstance->firmwareSave->CheckFlush();
 
-            emuInstance->drawScreen();
+            if (!skipFramePresentation)
+            {
+                if (!useOpenGL)
+                {
+                    frontBufferLock.lock();
+                    frontBuffer = emuInstance->nds->GPU.FrontBuffer;
+                    frontBufferLock.unlock();
+                }
+                else
+                {
+                    frontBuffer = emuInstance->nds->GPU.FrontBuffer;
+                    emuInstance->drawScreenGL();
+                }
+            }
 
 #ifdef MELONCAP
             MelonCap::Update();
@@ -329,14 +368,13 @@ void EmuThread::run()
             winUpdateCount++;
             if (winUpdateCount >= winUpdateFreq && !useOpenGL)
             {
-                emit windowUpdate();
+                if (!skipFramePresentation)
+                    emit windowUpdate();
                 winUpdateCount = 0;
             }
             
             if (emuInstance->hotkeyPressed(HK_FastForwardToggle)) emuInstance->fastForwardToggled = !emuInstance->fastForwardToggled;
             if (emuInstance->hotkeyPressed(HK_SlowMoToggle)) emuInstance->slowmoToggled = !emuInstance->slowmoToggled;
-
-            if (emuInstance->hotkeyPressed(HK_AudioMuteToggle)) emuInstance->toggleAudioMute();
 
             bool enablefastforward = emuInstance->hotkeyDown(HK_FastForward) | emuInstance->fastForwardToggled;
             bool enableslowmo = emuInstance->hotkeyDown(HK_SlowMo) | emuInstance->slowmoToggled;
@@ -356,7 +394,6 @@ void EmuThread::run()
 
             fastforward = enablefastforward;
             slowmo = enableslowmo;
-            emuInstance->updateFastForwardMute(fastforward);
 
             if (slowmo) emuInstance->curFPS = emuInstance->slowmoFPS;
             else if (fastforward) emuInstance->curFPS = emuInstance->fastForwardFPS;
@@ -439,11 +476,16 @@ void EmuThread::run()
 
             SDL_Delay(75);
 
-            emuInstance->drawScreen();
+            if (useOpenGL)
+            {
+                emuInstance->drawScreenGL();
+            }
         }
 
         handleMessages();
     }
+
+    LuaScript::stop();
 }
 
 void EmuThread::sendMessage(Message msg)
@@ -855,22 +897,32 @@ void EmuThread::enableCheats(bool enable)
     waitMessage();
 }
 
+void EmuThread::queueLuaScript(const QString& filename)
+{
+    QMutexLocker locker(&luaMutex);
+    luaPendingScript = filename;
+}
+
+void EmuThread::queueLuaControl(const QString& control)
+{
+    QMutexLocker locker(&luaMutex);
+    luaPendingControl = control;
+}
+
 void EmuThread::updateRenderer()
 {
-    auto nds = emuInstance->nds;
-
     if (videoRenderer != lastVideoRenderer)
     {
         switch (videoRenderer)
         {
             case renderer3D_Software:
-                nds->SetRenderer(std::make_unique<SoftRenderer>(*nds));
+                emuInstance->nds->GPU.SetRenderer3D(std::make_unique<SoftRenderer>());
                 break;
             case renderer3D_OpenGL:
-                nds->SetRenderer(std::make_unique<GLRenderer>(*nds, false));
+                emuInstance->nds->GPU.SetRenderer3D(GLRenderer::New());
                 break;
             case renderer3D_OpenGLCompute:
-                nds->SetRenderer(std::make_unique<GLRenderer>(*nds, true));
+                emuInstance->nds->GPU.SetRenderer3D(ComputeRenderer::New());
                 break;
             default: __builtin_unreachable();
         }
@@ -878,28 +930,37 @@ void EmuThread::updateRenderer()
     lastVideoRenderer = videoRenderer;
 
     auto& cfg = emuInstance->getGlobalConfig();
-    melonDS::RendererSettings settings = {
-        .ScaleFactor = cfg.GetInt("3D.GL.ScaleFactor"),
-        .Threaded = cfg.GetBool("3D.Soft.Threaded"),
-        .HiresCoordinates = cfg.GetBool("3D.GL.HiresCoordinates"),
-        .BetterPolygons = cfg.GetBool("3D.GL.BetterPolygons")
-    };
-
-    nds->GetRenderer().SetRenderSettings(settings);
+    switch (videoRenderer)
+    {
+        case renderer3D_Software:
+            static_cast<SoftRenderer&>(emuInstance->nds->GPU.GetRenderer3D()).SetThreaded(
+                    cfg.GetBool("3D.Soft.Threaded"),
+                    emuInstance->nds->GPU);
+            break;
+        case renderer3D_OpenGL:
+            static_cast<GLRenderer&>(emuInstance->nds->GPU.GetRenderer3D()).SetRenderSettings(
+                    cfg.GetBool("3D.GL.BetterPolygons"),
+                    cfg.GetInt("3D.GL.ScaleFactor"));
+            break;
+        case renderer3D_OpenGLCompute:
+            static_cast<ComputeRenderer&>(emuInstance->nds->GPU.GetRenderer3D()).SetRenderSettings(
+                    cfg.GetInt("3D.GL.ScaleFactor"),
+                    cfg.GetBool("3D.GL.HiresCoordinates"));
+            break;
+        default: __builtin_unreachable();
+    }
 }
 
 void EmuThread::compileShaders()
 {
-    auto& renderer = emuInstance->nds->GPU.GetRenderer();
     int currentShader, shadersCount;
     u64 startTime = SDL_GetPerformanceCounter();
     // kind of hacky to look at the wallclock, though it is easier than
     // than disabling vsync
     do
     {
-        renderer.ShaderCompileStep(currentShader, shadersCount);
-    }
-    while (renderer.NeedsShaderCompile() &&
+        emuInstance->nds->GPU.GetRenderer3D().ShaderCompileStep(currentShader, shadersCount);
+    } while (emuInstance->nds->GPU.GetRenderer3D().NeedsShaderCompile() &&
              (SDL_GetPerformanceCounter() - startTime) * perfCountsSec < 1.0 / 6.0);
     emuInstance->osdAddMessage(0, "Compiling shader %d/%d", currentShader+1, shadersCount);
 }

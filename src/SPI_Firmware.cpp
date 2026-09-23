@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -156,7 +156,7 @@ void Firmware::FirmwareHeader::UpdateChecksum()
     WifiConfigChecksum = CRC16(&Bytes[0x2C], WifiConfigLength, 0x0000);
 }
 
-Firmware::UserData::UserData(int consoletype)
+Firmware::UserData::UserData()
 {
     memset(Bytes, 0, sizeof(Bytes));
     Version = 5;
@@ -165,16 +165,7 @@ Firmware::UserData::UserData(int consoletype)
     Settings = Language::English | BacklightLevel::Max; // NOLINT(*-suspicious-enum-usage)
     memcpy(Nickname, DEFAULT_USERNAME.data(), DEFAULT_USERNAME.size() * sizeof(std::u16string_view::value_type));
     NameLength = DEFAULT_USERNAME.size();
-    if (consoletype == 1)
-    {
-        // The firmware header console type's bit 6 implies the existence of a
-        // valid extended header with a valid supported language mask. This is
-        // required for header checksum checks to pass.
-        ExtendedSettings.Unknown0 = 0x01;
-        ExtendedSettings.ExtendedLanguage = (Language) (Settings & 0x7);
-        ExtendedSettings.SupportedLanguageMask = 0x7F;
-    }
-    UpdateChecksum();
+    Checksum = CRC16(Bytes, 0x70, 0xFFFF);
 }
 
 void Firmware::UserData::UpdateChecksum()
@@ -226,8 +217,8 @@ Firmware::Firmware(int consoletype)
 
     std::array<UserData, 2>& settings = *reinterpret_cast<std::array<UserData, 2>*>(GetUserDataPosition());
     settings = {
-        UserData(consoletype),
-        UserData(consoletype),
+        UserData(),
+        UserData(),
     };
 
     // wifi access points

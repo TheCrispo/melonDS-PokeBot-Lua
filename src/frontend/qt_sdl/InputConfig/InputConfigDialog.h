@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -67,8 +67,7 @@ static constexpr std::initializer_list<int> hk_general =
     HK_SwapScreenEmphasis,
     HK_PowerButton,
     HK_VolumeUp,
-    HK_VolumeDown,
-    HK_AudioMuteToggle
+    HK_VolumeDown
 };
 
 static constexpr std::initializer_list<const char*> hk_general_labels =
@@ -88,8 +87,7 @@ static constexpr std::initializer_list<const char*> hk_general_labels =
     "Swap screen emphasis",
     "DSi Power button",
     "DSi Volume up",
-    "DSi Volume down",
-    "Toggle audio mute"
+    "DSi Volume down"
 };
 
 static_assert(hk_general.size() == hk_general_labels.size());

@@ -1,5 +1,6 @@
+#include "LuaScript.h"
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -36,9 +37,7 @@ void EmuInstance::audioInit()
     audioVolume = localCfg.GetInt("Audio.Volume");
     audioDSiVolumeSync = localCfg.GetBool("Audio.DSiVolumeSync");
 
-    audioMutedToggle = false;
-    audioMutedByFastForward = false;
-    audioMutedByWindowFocus = false;
+    audioMuted = false;
     audioSyncCond = SDL_CreateCond();
     audioSyncLock = SDL_CreateMutex();
 
@@ -99,25 +98,25 @@ void EmuInstance::audioDeInit()
     micLock = nullptr;
 }
 
-void EmuInstance::updateAudioMuteByWindowFocus()
+void EmuInstance::audioMute()
 {
-    audioMutedByWindowFocus = false;
+    audioMuted = false;
     if (numEmuInstances() < 2) return;
 
     switch (mpAudioMode)
     {
         case 1: // only instance 1
-            if (instanceID > 0) audioMutedByWindowFocus = true;
+            if (instanceID > 0) audioMuted = true;
             break;
 
         case 2: // only currently focused instance
-            audioMutedByWindowFocus = true;
+            audioMuted = true;
             for (int i = 0; i < kMaxWindows; i++)
             {
                 if (!windowList[i]) continue;
                 if (windowList[i]->isFocused())
                 {
-                    audioMutedByWindowFocus = false;
+                    audioMuted = false;
                     break;
                 }
             }
@@ -125,22 +124,12 @@ void EmuInstance::updateAudioMuteByWindowFocus()
     }
 }
 
-void EmuInstance::toggleAudioMute()
-{
-    audioMutedToggle = !audioMutedToggle;
-}
-
-void EmuInstance::updateFastForwardMute(bool fastForward)
-{
-    audioMutedByFastForward = fastForward && globalCfg.GetBool("MuteFastForward");
-}
-
 void EmuInstance::audioSync()
 {
     if (audioDevice)
     {
         SDL_LockMutex(audioSyncLock);
-        while (nds->SPU.GetOutputSize() >= audioBufSize)
+        while (nds->SPU.GetOutputSize() >= audioFreq / INTERNAL_FRAME_RATE)
         {
             int ret = SDL_CondWaitTimeout(audioSyncCond, audioSyncLock, 500);
             if (ret == SDL_MUTEX_TIMEDOUT) break;
@@ -164,18 +153,19 @@ void EmuInstance::audioCallback(void* data, Uint8* stream, int len)
     EmuInstance* inst = (EmuInstance*)data;
     len /= (sizeof(s16) * 2);
 
-    double skew = std::max(inst->targetFPS / INTERNAL_FRAME_RATE, 0.5);
+    double skew = std::clamp(inst->targetFPS / INTERNAL_FRAME_RATE, 0.995, 1.005);
     inst->nds->SPU.SetOutputSkew(skew);
 
     int len_in = inst->audioGetNumSamplesOut(len);
     if (len_in > inst->audioBufSize) len_in = inst->audioBufSize;
+    s16 buf_in[inst->audioBufSize*2];
 
     SDL_LockMutex(inst->audioSyncLock);
     int num_in = inst->nds->SPU.ReadOutput((s16*) stream, len_in);
     SDL_CondSignal(inst->audioSyncCond);
     SDL_UnlockMutex(inst->audioSyncLock);
 
-    if ((num_in < 1) || inst->audioMutedByWindowFocus || inst->audioMutedToggle || inst->audioMutedByFastForward)
+    if ((num_in < 1) || inst->audioMuted || LuaScript::isFocusModeActive())
     {
         memset(stream, 0, len*sizeof(s16)*2);
         return;
@@ -188,11 +178,12 @@ void EmuInstance::audioCallback(void* data, Uint8* stream, int len)
             samples[i] = ((s32) samples[i] * inst->audioVolume) >> 8;
     }
 
-    if (num_in < len_in)
+    int margin = 6;
+    if (num_in < len_in-margin)
     {
         int last = num_in-1;
 
-        for (int i = num_in; i < len_in; i++)
+        for (int i = num_in; i < len_in-margin; i++)
             ((u32*)stream)[i] = ((u32*)stream)[last];
     }
 }

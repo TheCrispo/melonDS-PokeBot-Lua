@@ -33,10 +33,8 @@
 
 namespace melonDS
 {
-std::array<u8, ARM9BIOSSize> FreeBIOSGetNtrArm9(void);
-std::array<u8, ARM7BIOSSize> FreeBIOSGetNtrArm7(void);
-std::array<u8, DSiBIOSSize> FreeBIOSGetTwlArm9(void);
-std::array<u8, DSiBIOSSize> FreeBIOSGetTwlArm7(void);
+extern std::array<u8, ARM7BIOSSize> bios_arm7_bin;
+extern std::array<u8, ARM9BIOSSize> bios_arm9_bin;
 }
 
 #endif // FREEBIOS_H

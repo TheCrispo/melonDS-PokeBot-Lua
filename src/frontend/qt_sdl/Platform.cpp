@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -40,6 +40,14 @@
 #include "Net.h"
 #include "MPInterface.h"
 #include "SPI_Firmware.h"
+
+#ifdef __WIN32__
+#include <io.h>
+#define fdopen _fdopen
+#define fseek _fseeki64
+#define ftell _ftelli64
+#define dup _dup
+#endif // __WIN32__
 
 extern CameraManager* camManager[2];
 
@@ -127,15 +135,20 @@ FileHandle* OpenFile(const std::string& path, FileMode mode)
     }
 
     QString qpath{QString::fromStdString(path)};
-    QFile* qfile = new QFile(qpath);
 
-    QIODevice::OpenMode qmode = GetQMode(mode);
     std::string modeString = GetModeString(mode, QFile::exists(qpath));
-
-    if (qfile->open(qmode))
+    QIODevice::OpenMode qmode = GetQMode(mode);
+    QFile qfile{qpath};
+    if (qfile.open(qmode))
     {
-        Log(LogLevel::Debug, "Opened \"%s\" with FileMode 0x%x (effective mode \"%s\")\n", path.c_str(), mode, modeString.c_str());
-        return reinterpret_cast<FileHandle *>(qfile);
+        FILE* file = fdopen(dup(qfile.handle()), modeString.c_str());
+        qfile.close();
+
+        if (file)
+        {
+            Log(LogLevel::Debug, "Opened \"%s\" with FileMode 0x%x (effective mode \"%s\")\n", path.c_str(), mode, modeString.c_str());
+            return reinterpret_cast<FileHandle *>(file);
+        }
     }
     Log(LogLevel::Warn, "Failed to open \"%s\" with FileMode 0x%x (effective mode \"%s\")\n", path.c_str(), mode, modeString.c_str());
     return nullptr;
@@ -167,30 +180,33 @@ FileHandle* OpenLocalFile(const std::string& path, FileMode mode)
 
 bool CloseFile(FileHandle* file)
 {
-    QFile* qfile = reinterpret_cast<QFile*>(file);
-    qfile->close();
-    delete qfile;
-    return true;
+    return fclose(reinterpret_cast<FILE *>(file)) == 0;
 }
 
 bool IsEndOfFile(FileHandle* file)
 {
-    return reinterpret_cast<QFile*>(file)->atEnd();
+    return feof(reinterpret_cast<FILE *>(file)) != 0;
 }
 
 bool FileReadLine(char* str, int count, FileHandle* file)
 {
-    return reinterpret_cast<QFile*>(file)->readLine(str, count);
+    return fgets(str, count, reinterpret_cast<FILE *>(file)) != nullptr;
 }
 
 bool FileExists(const std::string& name)
 {
-    return QFile::exists(QString::fromStdString(name));
+    FileHandle* f = OpenFile(name, FileMode::Read);
+    if (!f) return false;
+    CloseFile(f);
+    return true;
 }
 
 bool LocalFileExists(const std::string& name)
 {
-    return QFile::exists(QString::fromStdString(GetLocalFilePath(name)));
+    FileHandle* f = OpenLocalFile(name, FileMode::Read);
+    if (!f) return false;
+    CloseFile(f);
+    return true;
 }
 
 bool CheckFileWritable(const std::string& filepath)
@@ -233,45 +249,40 @@ bool CheckLocalFileWritable(const std::string& name)
 
 bool FileSeek(FileHandle* file, s64 offset, FileSeekOrigin origin)
 {
-    QFile* qfile = reinterpret_cast<QFile*>(file);
+    int stdorigin;
+    switch (origin)
+    {
+        case FileSeekOrigin::Start: stdorigin = SEEK_SET; break;
+        case FileSeekOrigin::Current: stdorigin = SEEK_CUR; break;
+        case FileSeekOrigin::End: stdorigin = SEEK_END; break;
+    }
 
-    if (origin == FileSeekOrigin::Current)
-        offset += qfile->pos();
-    else if (origin == FileSeekOrigin::End)
-        offset += qfile->size();
-
-    return qfile->seek(offset);
+    return fseek(reinterpret_cast<FILE *>(file), offset, stdorigin) == 0;
 }
 
 void FileRewind(FileHandle* file)
 {
-    reinterpret_cast<QFile*>(file)->seek(0);
+    rewind(reinterpret_cast<FILE *>(file));
 }
 
 u64 FilePosition(FileHandle* file)
 {
-    return reinterpret_cast<QFile*>(file)->pos();
+    return ftell(reinterpret_cast<FILE *>(file));
 }
 
 u64 FileRead(void* data, u64 size, u64 count, FileHandle* file)
 {
-    qint64 read = reinterpret_cast<QFile*>(file)->read(static_cast<char*>(data), size * count);
-
-    if (read > 0) read /= (qint64) size;
-    return read;
+    return fread(data, size, count, reinterpret_cast<FILE *>(file));
 }
 
 bool FileFlush(FileHandle* file)
 {
-    return reinterpret_cast<QFile*>(file)->flush();
+    return fflush(reinterpret_cast<FILE *>(file)) == 0;
 }
 
 u64 FileWrite(const void* data, u64 size, u64 count, FileHandle* file)
 {
-    qint64 written = reinterpret_cast<QFile*>(file)->write(static_cast<const char*>(data), size * count);
-
-    if (written > 0) written /= (qint64) size;
-    return written;
+    return fwrite(data, size, count, reinterpret_cast<FILE *>(file));
 }
 
 u64 FileWriteFormatted(FileHandle* file, const char* fmt, ...)
@@ -281,15 +292,19 @@ u64 FileWriteFormatted(FileHandle* file, const char* fmt, ...)
 
     va_list args;
     va_start(args, fmt);
-    const QByteArray formatted = QString::vasprintf(fmt, args).toUtf8();
-    reinterpret_cast<QFile*>(file)->write(formatted);
+    u64 ret = vfprintf(reinterpret_cast<FILE *>(file), fmt, args);
     va_end(args);
-    return formatted.size();
+    return ret;
 }
 
 u64 FileLength(FileHandle* file)
 {
-    return reinterpret_cast<QFile*>(file)->size();
+    FILE* stdfile = reinterpret_cast<FILE *>(file);
+    long pos = ftell(stdfile);
+    fseek(stdfile, 0, SEEK_END);
+    long len = ftell(stdfile);
+    fseek(stdfile, pos, SEEK_SET);
+    return len;
 }
 
 void Log(LogLevel level, const char* fmt, ...)

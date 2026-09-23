@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2026 melonDS team
+    Copyright 2016-2025 melonDS team
 
     This file is part of melonDS.
 
@@ -69,8 +69,6 @@ public:
 
     void osdSetEnabled(bool enabled);
     void osdAddMessage(unsigned int color, const char* msg);
-
-    virtual void drawScreen() {}// = 0;
 
 private slots:
     void onScreenLayoutChanged();
@@ -163,18 +161,11 @@ public:
     explicit ScreenPanelNative(QWidget* parent);
     virtual ~ScreenPanelNative();
 
-    void drawScreen() override;
-
 protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
     void setupScreenLayout() override;
-
-    QMutex bufferLock;
-    bool hasBuffers;
-    void* topBuffer;
-    void* bottomBuffer;
 
     QImage screen[2];
     QTransform screenTrans[kMaxScreenTransforms];
@@ -199,8 +190,7 @@ public:
     void deinitOpenGL();
     void makeCurrentGL();
     void releaseGL();
-
-    void drawScreen() override;
+    void drawScreenGL();
 
     GL::Context* getContext() { return glContext.get(); }
 
